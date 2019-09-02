@@ -157,37 +157,82 @@ async function getEvents(where: (event: Event) => boolean = (eventRow) => !!even
 }
 
 async function getEvent(eventId: number, loginUserId?: number): Promise<Event | null> {
-  const [[eventRow]] = await fastify.mysql.query("SELECT * FROM events WHERE id = ?", [eventId]);
+  interface Event {
+    id: number;
+    title: string;
+    public_fg: 0 | 1;
+    closed_fg: 0 | 1;
+    price: number;
+    total: number;
+    remains: number;
+  }
+  interface EventWithSheets extends Event {
+    sheets: Sheets;
+    public?: boolean;
+    closed?: boolean;
+  }
+  const [[eventRow]]: Event[][] = await fastify.mysql.query("SELECT * FROM events WHERE id = ?", [eventId]);
   if (!eventRow) {
     return null;
   }
 
-  const event = {
+  interface SheetDetail {
+    detail?: SheetProced[];
+    total?: number;
+    remains?: number;
+    price?: number;
+  }
+  interface Sheets {
+    S: SheetDetail;
+    A: SheetDetail;
+    B: SheetDetail;
+    C: SheetDetail;
+  }
+  const event: EventWithSheets = {
     ...eventRow,
-    sheets: {},
+    sheets: {} as { S: {}; A: {}; B: {}; C: {} },
   };
 
   // zero fill
   event.total = 0;
   event.remains = 0;
-  for (const rank of ["S", "A", "B", "C"]) {
-    const sheetsForRank = event.sheets[rank] ? event.sheets[rank] : (event.sheets[rank] = { detail: [] });
+  for (const rank of ["S", "A", "B", "C"] as const) {
+    const sheetsForRank: SheetDetail = event.sheets[rank] ? event.sheets[rank] : (event.sheets[rank] = { detail: [] });
     sheetsForRank.total = 0;
     sheetsForRank.remains = 0;
   }
 
-  const [sheetRows] = await fastify.mysql.query("SELECT * FROM sheets ORDER BY `rank`, num");
+  interface SheetRow {
+    id: number;
+    rank: "S" | "A" | "B" | "C";
+    num: number;
+    price: number;
+  }
+  interface SheetProced extends SheetRow {
+    mine?: boolean;
+    reserved?: boolean;
+    reserved_at?: number; // epoc time
+  }
+  const [sheetRows]: SheetRow[][] = await fastify.mysql.query("SELECT * FROM sheets ORDER BY `rank`, num");
 
   for (const sheetRow of sheetRows) {
-    const sheet = { ...sheetRow };
+    const sheet: SheetProced = { ...sheetRow };
     if (!event.sheets[sheet.rank].price) {
       event.sheets[sheet.rank].price = event.price + sheet.price;
     }
 
     event.total++;
-    event.sheets[sheet.rank].total++;
+    event.sheets[sheet.rank].total!++;
 
-    const [[reservation]] = await fastify.mysql.query("SELECT * FROM reservations WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)", [event.id, sheet.id]);
+    interface Reservation {
+      id: number;
+      event_id: number;
+      sheet_id: number;
+      user_id: number;
+      reserved_at: string;
+      canceled_at: string;
+    }
+    const [[reservation]]: Reservation[][] = await fastify.mysql.query("SELECT * FROM reservations WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)", [event.id, sheet.id]);
     if (reservation) {
       if (loginUserId && reservation.user_id === loginUserId) {
         sheet.mine = true;
@@ -197,10 +242,10 @@ async function getEvent(eventId: number, loginUserId?: number): Promise<Event | 
       sheet.reserved_at = parseTimestampToEpoch(reservation.reserved_at);
     } else {
       event.remains++;
-      event.sheets[sheet.rank].remains++;
+      event.sheets[sheet.rank].remains!++;
     }
 
-    event.sheets[sheet.rank].detail.push(sheet);
+    event.sheets[sheet.rank].detail!.push(sheet);
 
     delete sheet.id;
     delete sheet.price;
@@ -212,6 +257,11 @@ async function getEvent(eventId: number, loginUserId?: number): Promise<Event | 
   event.closed = !!event.closed_fg;
   delete event.closed_fg;
 
+  const ev: EventWithSheets = {
+    public: true, // from public_fg
+    closed: false, // from closed_fg
+
+}
   return event;
 }
 
@@ -230,7 +280,7 @@ async function validateRank(rank: string): Promise<boolean> {
 }
 
 function parseTimestampToEpoch(timestamp: string) {
-  return Math.floor(new Date(timestamp+"Z").getTime() / 1000);
+  return Math.floor(new Date(timestamp + "Z").getTime() / 1000);
 }
 
 fastify.get("/", { beforeHandler: fillinUser }, async (request, reply) => {
@@ -399,7 +449,7 @@ fastify.post("/api/events/:id/actions/reserve", { beforeHandler: loginRequired }
     return resError(reply, "invalid_event", 404);
   }
 
-  if (!await validateRank(rank)) {
+  if (!(await validateRank(rank))) {
     return resError(reply, "invalid_rank", 400);
   }
 
@@ -445,7 +495,7 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
   if (!(event && event.public)) {
     return resError(reply, "invalid_event", 404);
   }
-  if (!await validateRank(rank)) {
+  if (!(await validateRank(rank))) {
     return resError(reply, "invalid_rank", 404);
   }
 
