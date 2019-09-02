@@ -1,5 +1,15 @@
 version: '3'
 services:
+  mariadb:
+    image: mariadb:10.4.7 # doc: https://hub.docker.com/_/mariadb
+    command: mysqld --character-set-server=utf8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - 3306:3306
+    volumes:
+      - ./mariadb:/var/lib/mysql
+      - ./mysql.conf.d:/etc/mysql/conf.d
   mysql:
     image: mysql:8.0.17 # doc: https://hub.docker.com/_/mysql
     command: mysqld --character-set-server=utf8
