@@ -7,9 +7,11 @@ function slack() {
 
 slack ":deploy: $branch"
 
-ssh isu "cd /home/isucon/torb/webapp/go; git fetch; git checkout origin/$branch"
-ssh isu "sudo systemctl stop torb.go"
-ssh isu "make"
-ssh isu "sudo systemctl start torb.go"
+ssh isu <<EOF
+cd /home/isucon/torb/webapp/go; git fetch; git checkout origin/$branch
+sudo systemctl stop torb.go
+make
+sudo systemctl start torb.go
+EOF
 
 slack ":kan: $branch"
