@@ -2,4 +2,5 @@
 webapp/go/torb
 webapp/go/vendor
 
-bin
+bin/
+src/
