@@ -60,12 +60,43 @@ type Sheet struct {
 	ReservedAt     *time.Time `json:"-"`
 	ReservedAtUnix int64      `json:"reserved_at,omitempty"`
 }
+type NullInt64 struct { // 新たに型を定義
+	sql.NullInt64
+}
+
+func (ni *NullInt64) UnmarshalJSON(value []byte) error {
+	err := json.Unmarshal(value, ni.Int64)
+	ni.Valid = err == nil
+	return err
+}
+func (ni NullInt64) MarshalJSON() ([]byte, error) {
+	if !ni.Valid {
+		return json.Marshal(nil)
+	}
+	return json.Marshal(ni.Int64) // 値のフィールドのみ返す
+}
 
 type Reservation struct {
 	ID         int64      `json:"id"`
 	EventID    int64      `json:"-"`
 	SheetID    int64      `json:"-"`
 	UserID     int64      `json:"-"`
+	ReservedAt *time.Time `json:"-"`
+	CanceledAt *time.Time `json:"-"`
+
+	Event          *Event `json:"event,omitempty"`
+	SheetRank      string `json:"sheet_rank,omitempty"`
+	SheetNum       int64  `json:"sheet_num,omitempty"`
+	Price          int64  `json:"price,omitempty"`
+	ReservedAtUnix int64  `json:"reserved_at,omitempty"`
+	CanceledAtUnix int64  `json:"canceled_at,omitempty"`
+}
+
+type ReservationN struct {
+	ID         NullInt64  `json:"id"`
+	EventID    NullInt64  `json:"-"`
+	SheetID    NullInt64  `json:"-"`
+	UserID     NullInt64  `json:"-"`
 	ReservedAt *time.Time `json:"-"`
 	CanceledAt *time.Time `json:"-"`
 
@@ -233,7 +264,9 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 		"C": &Sheets{},
 	}
 
-	rows, err := db.Query("SELECT * FROM sheets ORDER BY `rank`, num")
+	rows, err := db.Query(`select s.id,s.rank,s.num,s.price,r.id,r.event_id,r.sheet_id,r.user_id,r.reserved_at,r.canceled_at from sheets s
+	left join (select * from reservations r where event_id=?  and canceled_at is null) r on s.id = r.sheet_id
+	`, event.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -241,31 +274,23 @@ func getEvent(eventID, loginUserID int64) (*Event, error) {
 
 	for rows.Next() {
 		var sheet Sheet
-		if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price); err != nil {
+		var reservation ReservationN
+		if err := rows.Scan(&sheet.ID, &sheet.Rank, &sheet.Num, &sheet.Price, &reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt); err != nil {
+			fmt.Println(err)
 			return nil, err
 		}
 		event.Sheets[sheet.Rank].Price = event.Price + sheet.Price
 		event.Total++
 		event.Sheets[sheet.Rank].Total++
 
-		var reservation Reservation
-		err := db.QueryRow(`
-		SELECT * FROM reservations
-		WHERE event_id = ?
-		AND sheet_id = ?
-		AND canceled_at IS NULL
-		order by reserved_at desc
-		limit 1
-		`, event.ID, sheet.ID).Scan(&reservation.ID, &reservation.EventID, &reservation.SheetID, &reservation.UserID, &reservation.ReservedAt, &reservation.CanceledAt)
-		if err == nil {
-			sheet.Mine = reservation.UserID == loginUserID
+		if reservation.ID.Valid {
+			userID, _ := reservation.UserID.Value()
+			sheet.Mine = userID == loginUserID
 			sheet.Reserved = true
 			sheet.ReservedAtUnix = reservation.ReservedAt.Unix()
-		} else if err == sql.ErrNoRows {
+		} else {
 			event.Remains++
 			event.Sheets[sheet.Rank].Remains++
-		} else {
-			return nil, err
 		}
 
 		event.Sheets[sheet.Rank].Detail = append(event.Sheets[sheet.Rank].Detail, &sheet)
