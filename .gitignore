@@ -1,2 +1,4 @@
 .envrc
 webapp/go/torb
+webapp/go/vendor
+
